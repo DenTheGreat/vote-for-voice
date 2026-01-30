@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { supabase } from '../../lib/supabase';
 
-export const POST: APIRoute = async ({ request, redirect }) => {
+export const POST: APIRoute = async ({ request, redirect, locals }) => {
   try {
     // Parse form data
     const formData = await request.formData();
@@ -17,31 +17,33 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     }
 
     // Increment winner's vote count
-    const { error: winnerError } = await supabase.rpc('increment_votes', {
-      phrase_id: winnerId
+    const { error: rpcError } = await supabase.rpc('increment_votes', {
+      message_id: winnerId
     });
 
     // If the RPC doesn't exist, use update instead
-    if (winnerError) {
+    if (rpcError) {
       // Fallback: Fetch current votes and increment
-      const { data: winnerPhrase } = await supabase
-        .from('phrases')
+      const { data: winnerMessage } = await supabase
+        .from('voice_messages')
         .select('votes')
         .eq('id', winnerId)
         .single();
 
-      if (winnerPhrase) {
+      if (winnerMessage) {
         await supabase
-          .from('phrases')
-          .update({ votes: winnerPhrase.votes + 1 })
+          .from('voice_messages')
+          .update({ votes: winnerMessage.votes + 1 })
           .eq('id', winnerId);
       }
     }
 
-    // Record the vote (optional - for analytics)
+    // Record the vote (for analytics)
+    const voterEmail = locals.user?.email || null;
     await supabase.from('vote_records').insert({
       winner_id: winnerId,
-      loser_id: loserId
+      loser_id: loserId,
+      voter_email: voterEmail
     });
 
     // Redirect back to vote page

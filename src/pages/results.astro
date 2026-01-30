@@ -1,47 +1,77 @@
 ---
-import { supabase } from '../lib/supabase';
+import { createSupabaseServerClient } from '../lib/supabase';
 import Layout from '../layouts/Layout.astro';
 
-// Fetch all phrases ordered by votes (descending)
-const { data: phrases, error } = await supabase
-  .from('phrases')
-  .select('id, text, votes')
-  .order('votes', { ascending: false });
+const SUPABASE_URL = import.meta.env.SUPABASE_URL;
+const STORAGE_URL = `${SUPABASE_URL}/storage/v1/object/public/voices`;
+
+const supabase = createSupabaseServerClient({ cookies: Astro.cookies, request: Astro.request });
+
+// Fetch all voice messages ordered by votes (descending)
+const { data: messages, error } = await supabase
+  .from('voice_messages')
+  .select('id, text, audio_file, duration, language, votes')
+  .order('votes', { ascending: false })
+  .limit(100);
 
 if (error) {
   console.error('Error fetching results:', error);
 }
 
 // Get total votes
-const totalVotes = phrases?.reduce((sum, phrase) => sum + phrase.votes, 0) || 0;
+const totalVotes = messages?.reduce((sum, msg) => sum + msg.votes, 0) || 0;
+
+function formatDuration(seconds: number | null): string {
+  if (!seconds) return '';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `0:${secs.toString().padStart(2, '0')}`;
+}
+
+function truncateText(text: string, maxLength: number = 100): string {
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '...';
+}
 ---
 
 <Layout title="Results - Vote for Voice">
   <main>
-    <h1>Results</h1>
+    <h1>Top Voice Messages</h1>
     <p class="subtitle">
       {totalVotes} {totalVotes === 1 ? 'vote' : 'votes'} cast
     </p>
 
-    {!phrases || phrases.length === 0 ? (
+    {!messages || messages.length === 0 ? (
       <div class="empty-state">
-        <p>No phrases yet. Add some phrases to the database to start voting!</p>
+        <p>No voice messages yet. Run the seed script to add messages!</p>
       </div>
     ) : (
       <div class="results-container">
         <ol class="results-list">
-          {phrases.map((phrase, index) => {
+          {messages.map((msg, index) => {
             const percentage = totalVotes > 0
-              ? Math.round((phrase.votes / totalVotes) * 100)
+              ? Math.round((msg.votes / totalVotes) * 100)
               : 0;
 
             return (
               <li class="result-item">
                 <div class="rank">#{index + 1}</div>
-                <div class="phrase-info">
-                  <div class="phrase-text">{phrase.text}</div>
+                <div class="message-info">
+                  <div class="audio-row">
+                    <button type="button" class="play-button" data-audio={`${STORAGE_URL}/${msg.audio_file}`} aria-label="Play audio">
+                      <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z"/>
+                      </svg>
+                      <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+                        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                      </svg>
+                    </button>
+                    {msg.duration && <span class="duration">{formatDuration(msg.duration)}</span>}
+                    {msg.language && <span class="language">{msg.language.toUpperCase()}</span>}
+                  </div>
+                  <div class="transcript">{truncateText(msg.text)}</div>
                   <div class="stats">
-                    <span class="votes">{phrase.votes} {phrase.votes === 1 ? 'vote' : 'votes'}</span>
+                    <span class="votes">{msg.votes} {msg.votes === 1 ? 'vote' : 'votes'}</span>
                     <span class="percentage">{percentage}%</span>
                   </div>
                   <div class="progress-bar">
@@ -61,11 +91,60 @@ const totalVotes = phrases?.reduce((sum, phrase) => sum + phrase.votes, 0) || 0;
   </main>
 </Layout>
 
+<script>
+  let currentAudio: HTMLAudioElement | null = null;
+  let currentButton: HTMLButtonElement | null = null;
+
+  document.querySelectorAll('.play-button').forEach(button => {
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget as HTMLButtonElement;
+      const audioUrl = btn.dataset.audio;
+
+      if (!audioUrl) return;
+
+      const playIcon = btn.querySelector('.play-icon') as SVGElement;
+      const pauseIcon = btn.querySelector('.pause-icon') as SVGElement;
+
+      if (currentButton === btn && currentAudio && !currentAudio.paused) {
+        currentAudio.pause();
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+        return;
+      }
+
+      if (currentAudio) {
+        currentAudio.pause();
+        if (currentButton) {
+          const prevPlay = currentButton.querySelector('.play-icon') as SVGElement;
+          const prevPause = currentButton.querySelector('.pause-icon') as SVGElement;
+          if (prevPlay) prevPlay.style.display = 'block';
+          if (prevPause) prevPause.style.display = 'none';
+        }
+      }
+
+      currentAudio = new Audio(audioUrl);
+      currentButton = btn;
+
+      playIcon.style.display = 'none';
+      pauseIcon.style.display = 'block';
+
+      currentAudio.play();
+
+      currentAudio.addEventListener('ended', () => {
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+      });
+    });
+  });
+</script>
+
 <style>
   main {
     max-width: 900px;
     margin: 0 auto;
     padding: 2rem;
+    padding-top: 4rem;
     min-height: 100vh;
   }
 
@@ -103,8 +182,8 @@ const totalVotes = phrases?.reduce((sum, phrase) => sum + phrase.votes, 0) || 0;
     display: flex;
     gap: 1rem;
     align-items: flex-start;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
+    padding: 1.25rem;
+    margin-bottom: 0.75rem;
     background: white;
     border-radius: 12px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -117,41 +196,92 @@ const totalVotes = phrases?.reduce((sum, phrase) => sum + phrase.votes, 0) || 0;
   }
 
   .rank {
-    font-size: 1.5rem;
+    font-size: 1.25rem;
     font-weight: bold;
     color: #667eea;
-    min-width: 60px;
+    min-width: 50px;
     text-align: center;
+    padding-top: 0.5rem;
   }
 
   .result-item:nth-child(1) .rank {
     color: #ffd700;
+    font-size: 1.5rem;
   }
 
   .result-item:nth-child(2) .rank {
     color: #c0c0c0;
+    font-size: 1.4rem;
   }
 
   .result-item:nth-child(3) .rank {
     color: #cd7f32;
+    font-size: 1.3rem;
   }
 
-  .phrase-info {
+  .message-info {
     flex: 1;
+    min-width: 0;
   }
 
-  .phrase-text {
-    font-size: 1.2rem;
+  .audio-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .play-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .play-button:hover {
+    transform: scale(1.1);
+  }
+
+  .play-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .duration {
+    font-size: 0.8rem;
+    color: #666;
+    font-family: monospace;
+  }
+
+  .language {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    background: #e9ecef;
+    border-radius: 3px;
+    color: #666;
+    font-weight: 600;
+  }
+
+  .transcript {
+    font-size: 1rem;
     margin-bottom: 0.5rem;
     color: #333;
-    font-weight: 500;
+    line-height: 1.4;
   }
 
   .stats {
     display: flex;
     gap: 1rem;
     margin-bottom: 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
   }
 
   .votes {
@@ -164,9 +294,9 @@ const totalVotes = phrases?.reduce((sum, phrase) => sum + phrase.votes, 0) || 0;
   }
 
   .progress-bar {
-    height: 8px;
+    height: 6px;
     background: #e9ecef;
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
   }
 
@@ -198,21 +328,29 @@ const totalVotes = phrases?.reduce((sum, phrase) => sum + phrase.votes, 0) || 0;
   }
 
   @media (max-width: 600px) {
+    main {
+      padding: 1rem;
+      padding-top: 3rem;
+    }
+
     h1 {
-      font-size: 2rem;
+      font-size: 1.75rem;
     }
 
     .result-item {
       padding: 1rem;
+      flex-direction: column;
+      gap: 0.5rem;
     }
 
     .rank {
-      font-size: 1.2rem;
-      min-width: 50px;
+      min-width: auto;
+      text-align: left;
+      padding-top: 0;
     }
 
-    .phrase-text {
-      font-size: 1rem;
+    .transcript {
+      font-size: 0.9rem;
     }
   }
 </style>

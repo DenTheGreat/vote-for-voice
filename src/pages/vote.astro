@@ -1,58 +1,100 @@
 ---
-import { supabase } from '../lib/supabase';
+import { createSupabaseServerClient } from '../lib/supabase';
 import Layout from '../layouts/Layout.astro';
 
-// Fetch phrases with fewer votes first, so all phrases get fair exposure
-const { data: phrases, error } = await supabase
-  .from('phrases')
-  .select('id, text')
+const SUPABASE_URL = import.meta.env.SUPABASE_URL;
+const STORAGE_URL = `${SUPABASE_URL}/storage/v1/object/public/voices`;
+
+const supabase = createSupabaseServerClient({ cookies: Astro.cookies, request: Astro.request });
+
+// Fetch voice messages with fewer votes first, so all messages get fair exposure
+const { data: messages, error } = await supabase
+  .from('voice_messages')
+  .select('id, text, audio_file, duration, language')
   .order('votes', { ascending: true })
-  .limit(50); // Get the 50 least-voted phrases, then randomly pick 2
+  .limit(50); // Get the 50 least-voted messages, then randomly pick 2
 
 if (error) {
-  console.error('Error fetching phrases:', error);
+  console.error('Error fetching voice messages:', error);
 }
 
-// If we have fewer than 2 phrases, show an error
-if (!phrases || phrases.length < 2) {
-  return Astro.redirect('/error?message=Not enough phrases in database');
+// If we have fewer than 2 messages, show an error
+if (!messages || messages.length < 2) {
+  return Astro.redirect('/error?message=Not enough voice messages in database');
 }
 
-// Randomly select 2 different phrases
-const shuffled = [...phrases].sort(() => Math.random() - 0.5);
-const phrase1 = shuffled[0];
-const phrase2 = shuffled[1];
+// Randomly select 2 different messages
+const shuffled = [...messages].sort(() => Math.random() - 0.5);
+const message1 = shuffled[0];
+const message2 = shuffled[1];
+
+function formatDuration(seconds: number | null): string {
+  if (!seconds) return '';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `0:${secs.toString().padStart(2, '0')}`;
+}
 ---
 
 <Layout title="Vote for Voice">
   <main>
-    <h1>Which phrase is better?</h1>
-    <p class="subtitle">Choose the one you like more</p>
+    <h1>Which voice message is better?</h1>
+    <p class="subtitle">Listen and choose the one you like more</p>
 
     <form method="POST" action="/api/vote">
-      <input type="hidden" name="loser_id" value={phrase2.id} id="loser_id" />
+      <input type="hidden" name="loser_id" value={message2.id} id="loser_id" />
 
       <div class="buttons">
-        <button
-          type="submit"
-          name="winner_id"
-          value={phrase1.id}
-          class="phrase-button"
-        >
-          <span class="phrase-text">{phrase1.text}</span>
-        </button>
+        <div class="message-card">
+          <div class="audio-section">
+            <button type="button" class="play-button" data-audio={`${STORAGE_URL}/${message1.audio_file}`} aria-label="Play audio">
+              <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+              <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+              </svg>
+            </button>
+            {message1.duration && <span class="duration">{formatDuration(message1.duration)}</span>}
+            {message1.language && <span class="language">{message1.language.toUpperCase()}</span>}
+          </div>
+          <p class="transcript">{message1.text}</p>
+          <button
+            type="submit"
+            name="winner_id"
+            value={message1.id}
+            class="vote-button"
+          >
+            Vote for this one
+          </button>
+        </div>
 
         <div class="vs">VS</div>
 
-        <button
-          type="submit"
-          name="winner_id"
-          value={phrase2.id}
-          class="phrase-button"
-          onclick="document.getElementById('loser_id').value = '{phrase1.id}'"
-        >
-          <span class="phrase-text">{phrase2.text}</span>
-        </button>
+        <div class="message-card">
+          <div class="audio-section">
+            <button type="button" class="play-button" data-audio={`${STORAGE_URL}/${message2.audio_file}`} aria-label="Play audio">
+              <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+              <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+              </svg>
+            </button>
+            {message2.duration && <span class="duration">{formatDuration(message2.duration)}</span>}
+            {message2.language && <span class="language">{message2.language.toUpperCase()}</span>}
+          </div>
+          <p class="transcript">{message2.text}</p>
+          <button
+            type="submit"
+            name="winner_id"
+            value={message2.id}
+            class="vote-button"
+            onclick={`document.getElementById('loser_id').value = '${message1.id}'`}
+          >
+            Vote for this one
+          </button>
+        </div>
       </div>
     </form>
 
@@ -62,9 +104,66 @@ const phrase2 = shuffled[1];
   </main>
 </Layout>
 
+<script>
+  let currentAudio: HTMLAudioElement | null = null;
+  let currentButton: HTMLButtonElement | null = null;
+
+  document.querySelectorAll('.play-button').forEach(button => {
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget as HTMLButtonElement;
+      const audioUrl = btn.dataset.audio;
+
+      if (!audioUrl) return;
+
+      const playIcon = btn.querySelector('.play-icon') as SVGElement;
+      const pauseIcon = btn.querySelector('.pause-icon') as SVGElement;
+
+      // If this button is already playing, pause it
+      if (currentButton === btn && currentAudio && !currentAudio.paused) {
+        currentAudio.pause();
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+        return;
+      }
+
+      // Stop any currently playing audio
+      if (currentAudio) {
+        currentAudio.pause();
+        if (currentButton) {
+          const prevPlay = currentButton.querySelector('.play-icon') as SVGElement;
+          const prevPause = currentButton.querySelector('.pause-icon') as SVGElement;
+          if (prevPlay) prevPlay.style.display = 'block';
+          if (prevPause) prevPause.style.display = 'none';
+        }
+      }
+
+      // Create and play new audio
+      currentAudio = new Audio(audioUrl);
+      currentButton = btn;
+
+      playIcon.style.display = 'none';
+      pauseIcon.style.display = 'block';
+
+      currentAudio.play();
+
+      currentAudio.addEventListener('ended', () => {
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+      });
+
+      currentAudio.addEventListener('error', () => {
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+        alert('Failed to load audio');
+      });
+    });
+  });
+</script>
+
 <style>
   main {
-    max-width: 800px;
+    max-width: 900px;
     margin: 0 auto;
     padding: 2rem;
     text-align: center;
@@ -75,67 +174,123 @@ const phrase2 = shuffled[1];
   }
 
   h1 {
-    font-size: 2.5rem;
+    font-size: 2rem;
     margin-bottom: 0.5rem;
     color: #333;
   }
 
   .subtitle {
     color: #666;
-    margin-bottom: 3rem;
+    margin-bottom: 2rem;
     font-size: 1.1rem;
   }
 
   .buttons {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
+    gap: 1.5rem;
     align-items: center;
   }
 
-  .phrase-button {
+  .message-card {
     width: 100%;
-    max-width: 500px;
-    padding: 2rem;
-    font-size: 1.5rem;
+    max-width: 600px;
+    padding: 1.5rem;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    text-align: left;
+  }
+
+  .audio-section {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .play-button {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .play-button:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  }
+
+  .play-button svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .duration {
+    font-size: 0.9rem;
+    color: #666;
+    font-family: monospace;
+  }
+
+  .language {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    background: #e9ecef;
+    border-radius: 4px;
+    color: #666;
+    font-weight: 600;
+  }
+
+  .transcript {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: #333;
+    margin-bottom: 1rem;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .vote-button {
+    width: 100%;
+    padding: 1rem;
+    font-size: 1rem;
+    font-weight: 600;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     border: none;
-    border-radius: 12px;
+    border-radius: 8px;
     cursor: pointer;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   }
 
-  .phrase-button:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 8px 12px rgba(0, 0, 0, 0.2);
-  }
-
-  .phrase-button:active {
+  .vote-button:hover {
     transform: translateY(-2px);
-  }
-
-  .phrase-text {
-    display: block;
-    line-height: 1.5;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
   }
 
   .vs {
-    font-size: 2rem;
+    font-size: 1.5rem;
     font-weight: bold;
     color: #999;
-    margin: 1rem 0;
+    margin: 0.5rem 0;
   }
 
   .bottom-nav {
-    margin-top: 3rem;
+    margin-top: 2rem;
   }
 
   .bottom-nav a {
     color: #667eea;
     text-decoration: none;
-    font-size: 1.1rem;
+    font-size: 1rem;
     padding: 0.5rem 1rem;
     border: 2px solid #667eea;
     border-radius: 6px;
@@ -148,14 +303,33 @@ const phrase2 = shuffled[1];
     color: white;
   }
 
-  @media (max-width: 600px) {
-    h1 {
-      font-size: 2rem;
+  @media (min-width: 768px) {
+    .buttons {
+      flex-direction: row;
+      align-items: stretch;
     }
 
-    .phrase-button {
-      padding: 1.5rem;
-      font-size: 1.2rem;
+    .message-card {
+      flex: 1;
+    }
+
+    .vs {
+      align-self: center;
+      margin: 0 1rem;
+    }
+  }
+
+  @media (max-width: 600px) {
+    h1 {
+      font-size: 1.5rem;
+    }
+
+    .message-card {
+      padding: 1rem;
+    }
+
+    .transcript {
+      font-size: 1rem;
     }
   }
 </style>
