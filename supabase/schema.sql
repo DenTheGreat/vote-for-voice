@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS voice_messages (
   language_probability REAL,
   message_datetime TIMESTAMP WITH TIME ZONE,
   votes INTEGER DEFAULT 0,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  flagged_for_removal BOOLEAN DEFAULT FALSE,
+  flagged_at TIMESTAMP WITH TIME ZONE,
+  flagged_by TEXT
 );
 
 -- Create index for faster sorting by votes
@@ -37,6 +40,9 @@ CREATE INDEX IF NOT EXISTS idx_voice_messages_votes ON voice_messages(votes DESC
 
 -- Create index for audio file lookups
 CREATE INDEX IF NOT EXISTS idx_voice_messages_audio_file ON voice_messages(audio_file);
+
+-- Create index for flagged voices
+CREATE INDEX IF NOT EXISTS idx_voice_messages_flagged ON voice_messages(flagged_for_removal) WHERE flagged_for_removal = TRUE;
 
 -- Create votes table (for tracking individual votes)
 CREATE TABLE IF NOT EXISTS vote_records (
@@ -101,3 +107,33 @@ BEGIN
   );
 END;
 $$;
+
+-- Create function to delete a voice message (admin only - called from server)
+CREATE OR REPLACE FUNCTION delete_voice_message(message_id UUID)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  audio_filename TEXT;
+BEGIN
+  -- Get the audio file name before deletion
+  SELECT audio_file INTO audio_filename FROM voice_messages WHERE id = message_id;
+
+  IF audio_filename IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- Delete the voice message (vote_records will cascade)
+  DELETE FROM voice_messages WHERE id = message_id;
+
+  -- Return the audio filename so the caller can delete it from storage
+  RETURN audio_filename;
+END;
+$$;
+
+-- Migration for existing databases:
+-- ALTER TABLE voice_messages ADD COLUMN IF NOT EXISTS flagged_for_removal BOOLEAN DEFAULT FALSE;
+-- ALTER TABLE voice_messages ADD COLUMN IF NOT EXISTS flagged_at TIMESTAMP WITH TIME ZONE;
+-- ALTER TABLE voice_messages ADD COLUMN IF NOT EXISTS flagged_by TEXT;
+-- CREATE INDEX IF NOT EXISTS idx_voice_messages_flagged ON voice_messages(flagged_for_removal) WHERE flagged_for_removal = TRUE;

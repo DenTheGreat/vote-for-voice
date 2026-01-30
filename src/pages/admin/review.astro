@@ -1,0 +1,386 @@
+---
+import { createSupabaseServerClient, isUserAdmin } from '../../lib/supabase';
+import Layout from '../../layouts/Layout.astro';
+
+const SUPABASE_URL = import.meta.env.SUPABASE_URL;
+const STORAGE_URL = `${SUPABASE_URL}/storage/v1/object/public/voices`;
+
+const supabase = createSupabaseServerClient({ cookies: Astro.cookies, request: Astro.request });
+
+// Check if user is admin
+const { data: { user } } = await supabase.auth.getUser();
+const userEmail = user?.email;
+
+if (!userEmail || !isUserAdmin(userEmail)) {
+  return Astro.redirect('/vote');
+}
+
+// Fetch flagged voice messages
+const { data: messages, error } = await supabase
+  .from('voice_messages')
+  .select('id, text, audio_file, duration, language, votes, flagged_at, flagged_by')
+  .eq('flagged_for_removal', true)
+  .order('flagged_at', { ascending: false });
+
+if (error) {
+  console.error('Error fetching flagged messages:', error);
+}
+
+function formatDuration(seconds: number | null): string {
+  if (!seconds) return '';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `0:${secs.toString().padStart(2, '0')}`;
+}
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function truncateText(text: string, maxLength: number = 150): string {
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '...';
+}
+---
+
+<Layout title="Review Flagged Voices - Admin">
+  <main>
+    <h1>Flagged Voices</h1>
+    <p class="subtitle">
+      {messages?.length || 0} {messages?.length === 1 ? 'voice' : 'voices'} flagged for review
+    </p>
+
+    {!messages || messages.length === 0 ? (
+      <div class="empty-state">
+        <p>No flagged voices to review.</p>
+      </div>
+    ) : (
+      <div class="review-container">
+        <ul class="review-list">
+          {messages.map((msg) => (
+            <li class="review-item">
+              <div class="message-content">
+                <div class="audio-row">
+                  <button type="button" class="play-button" data-audio={`${STORAGE_URL}/${msg.audio_file}`} aria-label="Play audio">
+                    <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                    </svg>
+                  </button>
+                  {msg.duration && <span class="duration">{formatDuration(msg.duration)}</span>}
+                  {msg.language && <span class="language">{msg.language.toUpperCase()}</span>}
+                  <span class="votes-badge">{msg.votes} votes</span>
+                </div>
+                <div class="transcript">{truncateText(msg.text)}</div>
+                <div class="flag-info">
+                  Flagged by {msg.flagged_by || 'unknown'} on {formatDate(msg.flagged_at)}
+                </div>
+              </div>
+              <div class="actions">
+                <form method="POST" action="/api/admin/unflag" class="action-form">
+                  <input type="hidden" name="voice_id" value={msg.id} />
+                  <button type="submit" class="btn btn-unflag">
+                    Unflag
+                  </button>
+                </form>
+                <form method="POST" action="/api/admin/remove" class="action-form" onsubmit="return confirm('Permanently delete this voice? This cannot be undone.')">
+                  <input type="hidden" name="voice_id" value={msg.id} />
+                  <button type="submit" class="btn btn-remove">
+                    Remove
+                  </button>
+                </form>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )}
+
+    <nav class="bottom-nav">
+      <a href="/vote">Back to Voting</a>
+      <a href="/results">View Results</a>
+    </nav>
+  </main>
+</Layout>
+
+<script>
+  let currentAudio: HTMLAudioElement | null = null;
+  let currentButton: HTMLButtonElement | null = null;
+
+  document.querySelectorAll('.play-button').forEach(button => {
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget as HTMLButtonElement;
+      const audioUrl = btn.dataset.audio;
+
+      if (!audioUrl) return;
+
+      const playIcon = btn.querySelector('.play-icon') as SVGElement;
+      const pauseIcon = btn.querySelector('.pause-icon') as SVGElement;
+
+      if (currentButton === btn && currentAudio && !currentAudio.paused) {
+        currentAudio.pause();
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+        return;
+      }
+
+      if (currentAudio) {
+        currentAudio.pause();
+        if (currentButton) {
+          const prevPlay = currentButton.querySelector('.play-icon') as SVGElement;
+          const prevPause = currentButton.querySelector('.pause-icon') as SVGElement;
+          if (prevPlay) prevPlay.style.display = 'block';
+          if (prevPause) prevPause.style.display = 'none';
+        }
+      }
+
+      currentAudio = new Audio(audioUrl);
+      currentButton = btn;
+
+      playIcon.style.display = 'none';
+      pauseIcon.style.display = 'block';
+
+      currentAudio.play();
+
+      currentAudio.addEventListener('ended', () => {
+        playIcon.style.display = 'block';
+        pauseIcon.style.display = 'none';
+      });
+    });
+  });
+</script>
+
+<style>
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2rem;
+    padding-top: 4rem;
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+    color: #333;
+    text-align: center;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: #666;
+    margin-bottom: 3rem;
+    font-size: 1.1rem;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: #999;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .review-container {
+    margin-bottom: 3rem;
+  }
+
+  .review-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .review-item {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid #ef4444;
+  }
+
+  .message-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .audio-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .play-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .play-button:hover {
+    transform: scale(1.1);
+  }
+
+  .play-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .duration {
+    font-size: 0.8rem;
+    color: #666;
+    font-family: monospace;
+  }
+
+  .language {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    background: #e9ecef;
+    border-radius: 3px;
+    color: #666;
+    font-weight: 600;
+  }
+
+  .votes-badge {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    background: #667eea;
+    color: white;
+    border-radius: 12px;
+    font-weight: 500;
+  }
+
+  .transcript {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    color: #333;
+    line-height: 1.5;
+  }
+
+  .flag-info {
+    font-size: 0.8rem;
+    color: #999;
+  }
+
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .action-form {
+    margin: 0;
+  }
+
+  .btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 90px;
+  }
+
+  .btn-unflag {
+    background: #f0f9ff;
+    color: #0284c7;
+    border: 1px solid #0284c7;
+  }
+
+  .btn-unflag:hover {
+    background: #0284c7;
+    color: white;
+  }
+
+  .btn-remove {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #dc2626;
+  }
+
+  .btn-remove:hover {
+    background: #dc2626;
+    color: white;
+  }
+
+  .bottom-nav {
+    text-align: center;
+    margin-top: 3rem;
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .bottom-nav a {
+    color: #667eea;
+    text-decoration: none;
+    font-size: 1rem;
+    padding: 0.75rem 1.5rem;
+    border: 2px solid #667eea;
+    border-radius: 6px;
+    transition: all 0.3s ease;
+  }
+
+  .bottom-nav a:hover {
+    background: #667eea;
+    color: white;
+  }
+
+  @media (max-width: 600px) {
+    main {
+      padding: 1rem;
+      padding-top: 3rem;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+    }
+
+    .review-item {
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .actions {
+      flex-direction: row;
+      width: 100%;
+    }
+
+    .btn {
+      flex: 1;
+    }
+
+    .transcript {
+      font-size: 0.9rem;
+    }
+  }
+</style>

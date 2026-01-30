@@ -43,6 +43,9 @@ export interface Database {
           message_datetime: string | null
           votes: number
           created_at: string
+          flagged_for_removal: boolean
+          flagged_at: string | null
+          flagged_by: string | null
         }
         Insert: {
           id?: string
@@ -54,6 +57,9 @@ export interface Database {
           message_datetime?: string | null
           votes?: number
           created_at?: string
+          flagged_for_removal?: boolean
+          flagged_at?: string | null
+          flagged_by?: string | null
         }
         Update: {
           id?: string
@@ -65,6 +71,9 @@ export interface Database {
           message_datetime?: string | null
           votes?: number
           created_at?: string
+          flagged_for_removal?: boolean
+          flagged_at?: string | null
+          flagged_by?: string | null
         }
       }
       vote_records: {

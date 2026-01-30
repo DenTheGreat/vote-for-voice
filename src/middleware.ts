@@ -1,8 +1,11 @@
 import { defineMiddleware } from 'astro:middleware';
-import { createSupabaseServerClient, isUserWhitelisted } from './lib/supabase';
+import { createSupabaseServerClient, isUserWhitelisted, isUserAdmin } from './lib/supabase';
 
 // Routes that don't require authentication
 const publicRoutes = ['/login', '/signup', '/api/auth/login', '/api/auth/signup'];
+
+// Routes that require admin access
+const adminRoutes = ['/admin', '/api/admin'];
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const { pathname } = context.url;
@@ -27,6 +30,13 @@ export const onRequest = defineMiddleware(async (context, next) => {
     if (!whitelisted) {
       await supabase.auth.signOut();
       return context.redirect('/login?error=not_whitelisted');
+    }
+
+    // Check admin access for admin routes
+    if (adminRoutes.some(route => pathname.startsWith(route))) {
+      if (!isUserAdmin(user.email)) {
+        return new Response('Unauthorized', { status: 403 });
+      }
     }
   }
 

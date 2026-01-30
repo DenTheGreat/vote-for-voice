@@ -73,3 +73,10 @@ export async function isUserWhitelisted(email: string): Promise<boolean> {
 
   return data === true;
 }
+
+// Check if user is admin
+export function isUserAdmin(email: string): boolean {
+  const adminEmails = import.meta.env.ADMIN_EMAILS || '';
+  const admins = adminEmails.split(',').map((e: string) => e.trim().toLowerCase());
+  return admins.includes(email.toLowerCase());
+}

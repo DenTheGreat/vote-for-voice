@@ -8,9 +8,11 @@ const STORAGE_URL = `${SUPABASE_URL}/storage/v1/object/public/voices`;
 const supabase = createSupabaseServerClient({ cookies: Astro.cookies, request: Astro.request });
 
 // Fetch voice messages with fewer votes first, so all messages get fair exposure
+// Exclude flagged voices from voting
 const { data: messages, error } = await supabase
   .from('voice_messages')
   .select('id, text, audio_file, duration, language')
+  .eq('flagged_for_removal', false)
   .order('votes', { ascending: true })
   .limit(50); // Get the 50 least-voted messages, then randomly pick 2
 
@@ -57,6 +59,11 @@ function formatDuration(seconds: number | null): string {
             </button>
             {message1.duration && <span class="duration">{formatDuration(message1.duration)}</span>}
             {message1.language && <span class="language">{message1.language.toUpperCase()}</span>}
+            <button type="button" class="flag-button" data-voice-id={message1.id} aria-label="Flag for removal" title="Flag for removal">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/>
+              </svg>
+            </button>
           </div>
           <p class="transcript">{message1.text}</p>
           <button
@@ -83,6 +90,11 @@ function formatDuration(seconds: number | null): string {
             </button>
             {message2.duration && <span class="duration">{formatDuration(message2.duration)}</span>}
             {message2.language && <span class="language">{message2.language.toUpperCase()}</span>}
+            <button type="button" class="flag-button" data-voice-id={message2.id} aria-label="Flag for removal" title="Flag for removal">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/>
+              </svg>
+            </button>
           </div>
           <p class="transcript">{message2.text}</p>
           <button
@@ -157,6 +169,34 @@ function formatDuration(seconds: number | null): string {
         pauseIcon.style.display = 'none';
         alert('Failed to load audio');
       });
+    });
+  });
+
+  // Flag button handlers
+  document.querySelectorAll('.flag-button').forEach(button => {
+    button.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget as HTMLButtonElement;
+      const voiceId = btn.dataset.voiceId;
+
+      if (!voiceId) return;
+
+      if (!confirm('Flag this voice for removal? An admin will review it.')) {
+        return;
+      }
+
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '/api/flag';
+
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'voice_id';
+      input.value = voiceId;
+
+      form.appendChild(input);
+      document.body.appendChild(form);
+      form.submit();
     });
   });
 </script>
@@ -247,6 +287,33 @@ function formatDuration(seconds: number | null): string {
     border-radius: 4px;
     color: #666;
     font-weight: 600;
+  }
+
+  .flag-button {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid #ddd;
+    color: #999;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .flag-button:hover {
+    background: #fee2e2;
+    border-color: #ef4444;
+    color: #ef4444;
+  }
+
+  .flag-button svg {
+    width: 16px;
+    height: 16px;
   }
 
   .transcript {
