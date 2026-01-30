@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
-import { supabase } from '../../lib/supabase';
+import { createSupabaseServerClient } from '../../lib/supabase';
 
-export const POST: APIRoute = async ({ request, redirect, locals }) => {
+export const POST: APIRoute = async ({ request, redirect, locals, cookies }) => {
   try {
     const formData = await request.formData();
     const voiceId = formData.get('voice_id')?.toString();
@@ -11,6 +11,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     }
 
     const userEmail = locals.user?.email || 'anonymous';
+    const supabase = createSupabaseServerClient({ cookies, request });
 
     // Flag the voice message for removal
     const { error } = await supabase

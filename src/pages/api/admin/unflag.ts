@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
-import { supabase, isUserAdmin } from '../../../lib/supabase';
+import { createSupabaseServerClient, isUserAdmin } from '../../../lib/supabase';
 
-export const POST: APIRoute = async ({ request, redirect, locals }) => {
+export const POST: APIRoute = async ({ request, redirect, locals, cookies }) => {
   try {
     // Check if user is admin
     const userEmail = locals.user?.email;
@@ -15,6 +15,8 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     if (!voiceId) {
       return new Response('Missing voice_id', { status: 400 });
     }
+
+    const supabase = createSupabaseServerClient({ cookies, request });
 
     // Unflag the voice message
     const { error } = await supabase
